@@ -12,3 +12,9 @@ googles openface
 
 https://github.com/gregnwosu/openface
 and whatever else i can get away with
+
+i.e. jetpacapp deepbeliefsdk
+
+https://github.com/jetpacapp/DeepBeliefSDK
+
+I may well add some form of CI system hudson or whatever such that pulls into the repo are automatically updated in a running robot, such that the community has a robot to play with, but this i feel will come later down the line
