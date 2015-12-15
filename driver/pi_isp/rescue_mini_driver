@@ -1,0 +1,7 @@
+#! /usr/bin/env python
+
+import subprocess
+
+subprocess.call( [ "./flash_arduino_bootloader", "atmega8" ] )
+
+    

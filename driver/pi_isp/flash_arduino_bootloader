@@ -1,0 +1,200 @@
+#! /usr/bin/env python
+
+import subprocess
+import sys
+import os
+import os.path
+import argparse
+
+#---------------------------------------------------------------------------------------------------
+class BoardData:
+    
+    #-----------------------------------------------------------------------------------------------
+    def __init__( self, board_type ):
+        
+        self.board_type = board_type
+        self.name = None
+        self.low_fuses = None
+        self.high_fuses = None
+        self.extended_fuses = None
+        self.path = None
+        self.file = None
+        self.unlock_bits = None
+        self.lock_bits = None
+        self.mcu = None
+
+#---------------------------------------------------------------------------------------------------
+def parse_boards_file( boards_filename ):
+
+    REQUIRED_BOARD_ATTRIBUTES = [
+        "name",
+        "low_fuses",
+        "high_fuses",
+        "path",
+        "file",
+        "unlock_bits",
+        "lock_bits",
+        "mcu"
+    ]
+
+    boards_dict = {}
+
+    # Open the file and parse each line
+    with open( boards_filename ) as boards_file:
+
+        for line in boards_file:
+
+            line = line.strip()
+            if len( line ) <= 0:
+                continue    # Skip empty lines
+            
+            if line[ 0 ] == '#':
+                continue    # Skip comments
+                
+            line_parts = line.split( "=" )
+            if len( line_parts ) < 2:
+                continue    # Skip lines that don't contain variables
+                
+            name = line_parts[ 0 ]
+            value = line_parts[ 1 ]
+            
+            name_parts = name.split( "." )
+            if len( name_parts ) < 2:
+                continue    # Skip variable names that don't have at least 2 parts
+                
+            board_type = name_parts[ 0 ]
+            
+            # Check to see if we already know about this board type
+            if board_type in boards_dict:
+                board = boards_dict[ board_type ]
+            else:
+                # New board type
+                board = BoardData( board_type )
+                boards_dict[ board_type ] = board
+            
+            if name_parts[ 1 ] == "name":
+                
+                board.name = value
+                
+            elif name_parts[ 1 ] in [ "bootloader", "build" ]:
+                
+                if len( name_parts ) < 3:
+                    continue    # These variable names must have at least 3 parts
+                    
+                variable_name = name_parts[ 2 ]
+                
+                if hasattr( board, variable_name ):
+                    setattr( board, variable_name, value )
+
+    # Check each board type to make sure that it's valid
+    invalid_boards = []
+    
+    for board_type in boards_dict:
+        board = boards_dict[ board_type ]
+        
+        board_valid = True
+        
+        for attribute_name in REQUIRED_BOARD_ATTRIBUTES:
+            
+            if not hasattr( board, attribute_name ) \
+                or getattr( board, attribute_name ) == None:
+        
+                print "Error: The board {0} is missing the {1} attribute".format( board.board_type, attribute_name )
+                board_valid = False
+                
+        if not board_valid:
+            invalid_boards.append( board )
+    
+    # Delete any invalid boards
+    for board in invalid_boards:
+        del boards_dict[ board.board_type ]
+        
+    return boards_dict
+
+#---------------------------------------------------------------------------------------------------
+def list_boards( boards_dict ):
+    
+    for board_type in boards_dict:
+        print board_type, "-", boards_dict[ board_type ].name
+    
+#---------------------------------------------------------------------------------------------------
+parser = argparse.ArgumentParser( description="Flashes an Arduino bootloader" )
+parser.add_argument( "board_type", metavar="board_type", nargs='*',
+                   help="The Arduino board type to flash" )
+parser.add_argument( "-l", "--list_boards", dest="list_boards", action="store_true",
+                     help="List the available Arduino board types" )
+parser.add_argument( "-a", "--arduino_diir", dest="arduino_dir", action="store_const", 
+                     const=str, default="/usr/share/arduino",
+                     help="Set the directory where the Arduino IDE is installed" )
+parser.add_argument( "-s", "--use_spi", dest="use_spi", action="store_true", 
+                     help="Program using SPI (by default we bit-bang via the GPIO pins)" )
+
+args = parser.parse_args()        
+
+boards_dict = parse_boards_file( args.arduino_dir + "/hardware/arduino/boards.txt" )
+
+if args.list_boards:
+    list_boards( boards_dict )
+    sys.exit( 0 )
+
+# Check that we're running with sudo
+if os.getuid() != 0:
+    print "Error: This program must be run with sudo to access the GPIO pins"
+    sys.exit( -1 )
+    
+board_type = None
+if len( args.board_type ) > 0:
+    board_type = args.board_type[ 0 ]
+
+if board_type not in boards_dict:
+    print "Error: Unrecognised board type -", board_type
+    print ""
+    list_boards( boards_dict )
+    sys.exit( -1 )
+    
+else:
+    board = boards_dict[ board_type ]
+    
+    if args.use_spi:
+        programmer = "linuxspi"
+        port = "/dev/spidev0.0"
+    else:
+        programmer = "linuxgpio"
+        port = "gpio"
+    
+    # First set the fuses
+    subprocess_args = [ "bin/avrdude_pi", 
+        "-C", "etc/avrdude.conf",
+        "-c", programmer,
+        "-p", board.mcu, "-P", port, "-e", "-u", 
+        "-U", "lock:w:{0}:m".format( board.unlock_bits ), 
+        "-U", "hfuse:w:{0}:m".format( board.high_fuses ), 
+        "-U", "lfuse:w:{0}:m".format( board.low_fuses ) ]
+    
+    if board.extended_fuses != None:
+        subprocess_args += [ "-U", "efuse:w:{0}:m".format( board.extended_fuses ) ]
+    
+    result = subprocess.call( subprocess_args )
+    
+    if result != 0:
+        print "Error: Unable to set fuses. Please check the connection"
+        sys.exit( -1 )
+
+    # Now upload the firmware
+    firmwarePath = args.arduino_dir \
+        + "/hardware/arduino/bootloaders/" + board.path + "/" + board.file
+
+    result = subprocess.call( [ "bin/avrdude_pi", 
+        "-C", "etc/avrdude.conf",
+        "-c", programmer,
+        "-p", board.mcu, "-P", port, "-B", "1",
+        "-U", "flash:w:" + firmwarePath, "-U" "lock:w:{0}:m".format( board.lock_bits ) ] )
+            
+    if result == 0:
+        print "--------------------------------------------"
+        print "Success!"
+        print "--------------------------------------------"
+    else:
+        print "VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV"
+        print "FAILED to upload bootloader"
+        print "VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV"
