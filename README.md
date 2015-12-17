@@ -22,6 +22,9 @@ I may well add some form of CI system hudson or whatever such that pulls into th
 
 using sending images to a cloud instance for processing, the cloud instance uses https://github.com/Lasagne/Lasagne and OpenCV for cost functions, also sending the generated vector output
 
+*dlib* 
+http://dlib.net/
+
 ```
 // The contents of this file are in the public domain. See LICENSE_FOR_EXAMPLE_PROGRAMS.txt
 /*
